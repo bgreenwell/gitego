@@ -123,7 +123,7 @@ git ego add gitlab-work --name "Brandon" --email "brandon@company.com" --usernam
 Use the `list` (or `ls`) command to see all the profiles you’ve saved.
 
 ```bash
-git ego list
+git ego list --check-pats
 ```
 
 ```
@@ -202,7 +202,7 @@ Run `git ego doctor --repair` once. It assigns stable internal credential IDs, m
 | `git ego pat delete <name>` | | Deletes a PAT from the secure keyring. |
 | `git ego install-hook` | | Installs a pre-commit hook in the current repo. |
 | `git ego completion <shell>` | | Generates shell completion scripts. |
-| `git ego doctor` | | Checks auto-switch rules for Git/YAML drift. |
+| `git ego doctor` | | Checks markers, generated Git files, credential IDs, rules, and helper configuration. |
 | `git ego doctor --repair` | | Migrates legacy credentials and regenerates managed Git files. |
 | `git ego profiles export <file>` | | Exports profiles and auto-rules without PATs. |
 | `git ego profiles import <file>` | | Imports profiles and auto-rules without PATs. |
@@ -217,20 +217,18 @@ Run `git ego doctor --repair` once. It assigns stable internal credential IDs, m
 
 ```mermaid
 graph LR
-    A[Enter Directory] --> B{Auto-rule?};
-    B -- Yes --> C[Activate Profile .gitconfig];
-    C --> D[Switch user/email/SSH];
-    B -- No --> E[Use Global .gitconfig];
-    D --> F[git push/pull];
+    A[Enter repository] --> B[Git evaluates managed includes];
+    B --> C[Effective identity and gitego.profile];
+    C --> D{Explicit expectation?};
+    D -- .gitego or auto-rule --> E[Verify expected profile];
+    D -- None --> F[Verify effective profile identity];
     E --> F;
-    F --> G{HTTPS?};
-    G -- Yes --> H[Git calls git-ego helper];
-    H --> I[git-ego finds profile];
-    I --> J[Get PAT from Keychain];
-    J --> K[Return credentials];
-    G -- No --> L[Use sshCommand];
-    K --> M[Auth OK];
-    L --> M[Auth OK];
+    F --> G{Consistent?};
+    G -- No --> H[Refuse credentials or abort commit];
+    G -- Yes --> I{HTTPS operation?};
+    I -- Yes --> J[Read credential-ID PAT from keychain];
+    J --> K[Return host-scoped credential];
+    I -- No --> L[Use profile SSH configuration];
 ```
 
 ### 1\. Identity switching: `includeIf`
@@ -244,13 +242,14 @@ The generated layout is:
 3. `~/.gitego/includes.gitconfig` includes the default first, followed by directory rules from broad to specific.
 4. One include at the end of `~/.gitconfig` loads `includes.gitconfig`.
 
-This tells Git to merge the profile settings for repositories inside `~/work/`.
+Git evaluates all matching rules in order, so a nested rule can safely
+override a broader directory rule.
 
 ### 2\. Authentication: credential helper
 
 For handling Personal Access Tokens (PATs) with HTTPS remotes, `git-ego` acts as a **Git credential helper**.
 
-1.  **Configuration**: The `git config --global credential.helper '!git-ego credential'` command tells Git that whenever it needs a username or password for an `https://` URL, it should run the `git-ego credential` command.
+1.  **Configuration**: The host-scoped commands in the setup section tell Git to invoke `git-ego credential` for `https://github.com` without replacing helpers for unrelated hosts.
 2.  **Execution**: When you run `git push` or `git pull` on an HTTPS remote, Git executes `git-ego credential` in the background and pipes it the protocol, host, and path information.
 3.  **Context Resolution**: Git's effective `gitego.profile` marker is the credential source of truth. The helper verifies its effective `user.name` and `user.email`, then checks any repository-root `.gitego` assertion or most-specific auto-rule.
 4.  **Secure Retrieval**: It then fetches the corresponding PAT for that profile from your operating system's native, secure keychain (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
@@ -265,6 +264,18 @@ PAT handling:
   * **Host Scoping:** The credential helper only provides a token for an HTTPS host explicitly configured on the selected profile. It ignores requests for other hosts and all `store` and `erase` operations.
   * **Consistency Checks:** A missing/unknown marker, identity mismatch, or explicit expectation mismatch produces no credential protocol output.
   * **In-Memory Use:** The token is passed directly to Git in memory and is not logged or stored elsewhere.
+
+### Persistence and repair
+
+`~/.gitego/config.yaml` is the authoritative desired state. Mutating commands
+serialize access with `~/.gitego/config.lock`, atomically save validated YAML,
+and then regenerate the managed Git files. If regeneration is interrupted or
+fails, the YAML remains valid and `git ego doctor --repair` can rebuild the
+derived files.
+
+Profiles use an internal random credential ID for keychain accounts so renames,
+imports, and removals cannot accidentally reuse a stale name-keyed PAT.
+Portable exports omit these IDs, and imports always generate fresh ones.
 
 
 ## Contributing
