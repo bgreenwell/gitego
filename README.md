@@ -94,6 +94,10 @@ git config --global credential.https://github.com.helper ""
 git config --global --add credential.https://github.com.helper "!git-ego credential"
 ```
 
+In v0.3, `git ego doctor` checks the general `credential.helper` key and may
+therefore report a helper warning when only this recommended host-scoped
+configuration is present. The host-scoped helper itself still works normally.
+
 ## Example usage
 
 Here’s a typical workflow for setting up and using `git-ego`.
